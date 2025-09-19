@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Animal Facts Graph</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f0f4f8;
+            color: #334155;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .my-container {
+            background-color: #ffffff;
+            border-radius: 12px;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            padding: 2rem;
+            width: 100%;
+            max-width: 800px;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .my-button {
+            padding: 0.75rem 1.5rem;
+            font-weight: 600;
+            color: #fff;
+            border-radius: 0.5rem;
+            border: none;
+            cursor: pointer;
+            transition: all 0.2s ease-in-out;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        .my-load-button { background-color: #4b5563; }
+        .my-stream-button { background-color: #10b981; }
+        .my-clear-button { background-color: #ef4444; }
+
+        .my-button:disabled { background-color: #a3a3a3; cursor: not-allowed; }
+        .my-button:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 6px 10px rgba(0, 0, 0, 0.15); }
+
+        .my-button-group {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        
+        .my-textarea {
+            width: 100%;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            border: 1px solid #d1d5db;
+            resize: vertical;
+            min-height: 120px;
+            font-family: inherit;
+            box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.06);
+        }
+
+        .my-status {
+            min-height: 2rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.875rem;
+            color: #4b5563;
+        }
+
+        #myGraphContainer {
+            width: 100%;
+            height: 500px;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            background-color: #f9fafb;
+            overflow: hidden;
+            position: relative;
+        }
+        
+        .my-node {
+            cursor: pointer;
+            stroke: #4b5563;
+            stroke-width: 2px;
+        }
+
+        .my-node:hover {
+            stroke: #2563eb;
+            stroke-width: 4px;
+        }
+
+        .my-link {
+            stroke: #9ca3af;
+            stroke-opacity: 0.6;
+            stroke-width: 1.5px;
+        }
+
+        .my-tooltip {
+            background-color: #4b5563;
+            color: #ffffff;
+            padding: 1rem;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            position: absolute;
+            bottom: 2rem;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 80%;
+            max-width: 600px;
+            text-align: left;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.3s ease-in-out, visibility 0.3s ease-in-out;
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        .my-tooltip.my-visible {
+            opacity: 1;
+            visibility: visible;
+        }
+    </style>
+</head>
+<body>
+    <div class="my-container">
+        <h1>Animal Facts Graph</h1>
+        <p>Use the buttons to generate and visualize new animal facts.</p>
+        <div class="my-button-group">
+            <button id="myLoadButton" onclick="myLoadModel()" class="my-button my-load-button">myLoadModel</button>
+            <button id="myStreamButton" onclick="myToggleStream()" class="my-button my-stream-button" disabled>myStreamModel</button>
+            <button id="myClearButton" onclick="myClearGraph()" class="my-button my-clear-button">myClearGraph</button>
+        </div>
+        <div id="myDiv01" class="my-status">...</div>
+        <textarea id="myInputPrompt" class="my-textarea" rows="4" placeholder="Type your prompt here...">Generate a single JSON object about animals. The object must contain two top-level keys: "nodes" and "links". The "nodes" value must be an array of objects, each with "id" (a unique ordered number), "parentId" (a string corresponding to its parent's id, or an empty string for the root node which in this case will have the name "animals"), "name" (a descriptive string), and "fact" (a string containing a brief interesting fact about the node). The "links" value must be an empty array []. Do not include any text outside of the JSON object.</textarea>
+        <div id="myGraphContainer"></div>
+        <div id="myTooltip" class="my-tooltip"></div>
+    </div>
+    
+    <script>
+        let mySession = null;
+        const myInputPrompt = document.getElementById('myInputPrompt');
+        const myDiv01 = document.getElementById('myDiv01');
+        const myStreamButton = document.getElementById('myStreamButton');
+        const myLoadButton = document.getElementById('myLoadButton');
+        const myGraphContainer = document.getElementById('myGraphContainer');
+        const myTooltip = document.getElementById('myTooltip');
+
+        let myStartTime = 0;
+        let myTimerInterval = null;
+        let myLastGeneratedText = '';
+        let myController = null;
+        let myIsProcessing = false;
+
+        // D3.js visualization variables
+        let mySvg = null;
+        let mySimulation = null;
+        let myNodes = [];
+        let myLinks = [];
+
+        // Helper function to update the timer display
+        function myUpdateTimerDisplay() {
+            const myElapsed = (Date.now() - myStartTime) / 1000;
+            myDiv01.textContent = `Thinking... ${myElapsed.toFixed(2)}s`;
+        }
+
+        // Helper function to reset all streaming-related state
+        function myResetStreamState() {
+            myLastGeneratedText = '';
+            if (myTimerInterval) {
+                clearInterval(myTimerInterval);
+                myTimerInterval = null;
+            }
+            myController = null;
+        }
+
+        async function myLoadModel() {
+            if (myIsProcessing) return;
+            myDiv01.textContent = 'Loading model...';
+            try {
+                myIsProcessing = true;
+                if (typeof LanguageModel === 'undefined') {
+                    myDiv01.textContent = 'Error: LanguageModel API is not available. Please enable the required flags in Chrome.';
+                    return;
+                }
+                mySession = await LanguageModel.create();
+                myDiv01.textContent = 'Model loaded successfully. Ready to stream.';
+                myLoadButton.disabled = true;
+                myStreamButton.disabled = false;
+            } catch (myError) {
+                myDiv01.textContent = `Error loading model: ${myError.message}`;
+            } finally {
+                myIsProcessing = false;
+            }
+        }
+
+        async function myToggleStream() {
+            if (myStreamButton.textContent === 'Stop' && myController) {
+                myController.abort();
+                return;
+            }
+
+            if (myIsProcessing) return;
+            myResetStreamState();
+            myClearGraph();
+
+            const myPrompt = myInputPrompt.value.trim();
+
+            if (!mySession) {
+                myDiv01.textContent = 'Please load the model first.';
+                return;
+            }
+            if (!myPrompt) {
+                myDiv01.textContent = 'Please enter a prompt.';
+                return;
+            }
+
+            myStreamButton.textContent = 'Stop';
+            myLoadButton.disabled = true;
+            myStartTime = Date.now();
+            myTimerInterval = setInterval(myUpdateTimerDisplay, 100);
+            myController = new AbortController();
+
+            // Start the live parsing interval
+            let myLiveParsingInterval = setInterval(myProcessLiveStream, 500);
+
+            try {
+                myIsProcessing = true;
+                const myStream = await mySession.promptStreaming(myPrompt, { signal: myController.signal });
+                for await (const myChunk of myStream) {
+                    myLastGeneratedText += myChunk;
+                }
+            } catch (myError) {
+                if (myError.name === 'AbortError') {
+                    myDiv01.textContent = 'Streaming stopped by user.';
+                } else {
+                    myDiv01.textContent = `Error: ${myError.message}`;
+                }
+            } finally {
+                clearInterval(myTimerInterval);
+                clearInterval(myLiveParsingInterval);
+                myDiv01.textContent = 'Generation complete.';
+                myStreamButton.textContent = 'myStreamModel';
+                myLoadButton.disabled = mySession ? true : false;
+                myStreamButton.disabled = mySession ? false : true;
+                myIsProcessing = false;
+                myController = null;
+                // Final update after streaming ends
+                myProcessLiveStream();
+            }
+        }
+        
+        function myProcessLiveStream() {
+            try {
+                const myStartIndex = myLastGeneratedText.indexOf('{');
+                const myEndIndex = myLastGeneratedText.lastIndexOf('}');
+                
+                if (myStartIndex === -1 || myEndIndex === -1) {
+                    return; // No full JSON object yet
+                }
+
+                const mySanitizedText = myLastGeneratedText.substring(myStartIndex, myEndIndex + 1);
+                const myPartialData = JSON.parse(mySanitizedText);
+
+                if (myPartialData && myPartialData.nodes && myPartialData.nodes.length > myNodes.length) {
+                    myNodes = myPartialData.nodes;
+                    myLinks = myPartialData.nodes
+                        .filter(d => d.parentId !== "")
+                        .map(d => ({
+                            source: d.parentId,
+                            target: d.name
+                        }));
+                    myVisualizeGraph();
+                }
+
+            } catch (e) {
+                // Do nothing, just means the JSON is not yet complete.
+            }
+        }
+
+        function myVisualizeGraph() {
+            const myWidth = myGraphContainer.clientWidth;
+            const myHeight = myGraphContainer.clientHeight;
+
+            // Initialize SVG and simulation on first call
+            if (!mySvg) {
+                mySvg = d3.select("#myGraphContainer").append("svg")
+                    .attr("viewBox", `0 0 ${myWidth} ${myHeight}`);
+                
+                mySimulation = d3.forceSimulation(myNodes)
+                    .force("link", d3.forceLink(myLinks).id(d => d.name).distance(100))
+                    .force("charge", d3.forceManyBody().strength(-200))
+                    .force("center", d3.forceCenter(myWidth / 2, myHeight / 2));
+            }
+            
+            // D3 Data Join to handle adding/removing elements
+            const myLinkElements = mySvg.selectAll(".my-link")
+                .data(myLinks);
+            
+            myLinkElements.enter().append("line")
+                .attr("class", "my-link")
+                .merge(myLinkElements);
+            
+            const myNodeElements = mySvg.selectAll(".my-node")
+                .data(myNodes);
+            
+            myNodeElements.enter().append("circle")
+                .attr("class", "my-node")
+                .attr("r", 15)
+                .call(d3.drag()
+                    .on("start", myDragStarted)
+                    .on("drag", myDragged)
+                    .on("end", myDragEnded))
+                .merge(myNodeElements)
+                .on("mouseenter", (event, d) => {
+                    myTooltip.textContent = d.fact;
+                    myTooltip.classList.add('my-visible');
+                }).on("mouseleave", () => {
+                    myTooltip.classList.remove('my-visible');
+                });
+            
+            const myTextLabels = mySvg.selectAll(".my-labels")
+                .data(myNodes)
+                .join("text")
+                .attr("class", "my-labels")
+                .text(d => d.name)
+                .attr("font-size", "10px")
+                .attr("text-anchor", "middle")
+                .attr("dy", "0.3em")
+                .style("pointer-events", "none");
+
+            // Update simulation with new data
+            mySimulation.nodes(myNodes);
+            mySimulation.force("link").links(myLinks);
+            mySimulation.alpha(1).restart();
+
+            // Update positions on each tick
+            mySimulation.on("tick", () => {
+                mySvg.selectAll(".my-link")
+                    .attr("x1", d => d.source.x)
+                    .attr("y1", d => d.source.y)
+                    .attr("x2", d => d.target.x)
+                    .attr("y2", d => d.target.y);
+
+                mySvg.selectAll(".my-node")
+                    .attr("cx", d => d.x)
+                    .attr("cy", d => d.y);
+                
+                mySvg.selectAll(".my-labels")
+                    .attr("x", d => d.x)
+                    .attr("y", d => d.y);
+            });
+        }
+
+        function myClearGraph() {
+            d3.select("#myGraphContainer").select("svg").remove();
+            myTooltip.classList.remove('my-visible');
+            myDiv01.textContent = '...';
+            myNodes = [];
+            myLinks = [];
+            mySvg = null;
+            mySimulation = null;
+        }
+
+        function myDragStarted(event, d) {
+            if (!event.active) mySimulation.alphaTarget(0.3).restart();
+            d.fx = d.x;
+            d.fy = d.y;
+        }
+
+        function myDragged(event, d) {
+            d.fx = event.x;
+            d.fy = event.y;
+        }
+
+        function myDragEnded(event, d) {
+            if (!event.active) mySimulation.alphaTarget(0);
+            d.fx = null;
+            d.fy = null;
+        }
+    </script>
+</body>
+</html>
